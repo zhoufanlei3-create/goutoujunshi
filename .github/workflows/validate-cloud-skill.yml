@@ -1,0 +1,49 @@
+name: Validate Cloud Skill
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-cloud-skill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate packaged skill
+        run: python3 -B .agents/skills/goutoujunshi/scripts/validate_skill.py --runtime
+      - name: Verify package matches original files
+        run: |
+          python3 -B - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          root = Path.cwd()
+          package = root / ".agents/skills/goutoujunshi"
+          output = subprocess.check_output([
+              "git", "ls-files", "-z", "--",
+              "SKILL.md", "references", "scripts", "assets", "agents", "LICENSE",
+          ])
+          expected = set(filter(None, output.decode("utf-8").split("\0")))
+          actual = {
+              str(path.relative_to(package))
+              for path in package.rglob("*") if path.is_file()
+          }
+          if expected != actual:
+              raise SystemExit(
+                  f"Package inventory differs: missing={sorted(expected - actual)}, "
+                  f"extra={sorted(actual - expected)}"
+              )
+          for name in sorted(expected):
+              source, target = root / name, package / name
+              if target.is_symlink() or source.read_bytes() != target.read_bytes():
+                  raise SystemExit(f"Package differs from original: {name}")
+              if (source.stat().st_mode & 0o111) != (target.stat().st_mode & 0o111):
+                  raise SystemExit(f"Executable permissions differ: {name}")
+          print(f"All {len(expected)} packaged files match the originals")
+          PY
